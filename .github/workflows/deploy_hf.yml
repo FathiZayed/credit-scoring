@@ -1,50 +1,60 @@
 name: Deploy to Hugging Face Spaces
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch: # Manual trigger
   push:
     branches:
       - main
     paths:
       - 'app/**'
       - 'models/**'
+      - 'environment.yml'
       - '.github/workflows/deploy_hf.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: '3.9'
-      
-      - name: Install dependencies
-        run: |
-          pip install mlflow gradio scikit-learn pandas numpy
-      
+          # The environment file from our previous discussion
+          environment-file: environment.yml
+          
+          # The name of the environment you want to activate (must match environment.yml)
+          activate-environment: credit-scoring
+          
+          # Optional: Set the channels to use for the entire job
+          # This is a good practice to ensure consistency.
+          miniforge-version: latest
+          use-mamba: false
+
+      # Note: From this point on, the 'credit-scoring' conda environment is active in all run steps.
+      # This replaces the 'pip install' step! The 'setup-miniconda' action has already installed
+      # all dependencies from your environment.yml file.
+
       - name: Export model from MLFlow
         run: |
           # Start MLFlow server (or connect to remote)
           # Export the production model
           python scripts/export_model.py
         env:
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}
-      
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+
       - name: Prepare Space files
         run: |
           # Copy necessary files to a deployment folder
           mkdir -p deploy_space
           cp app/credit_scoring_demo.py deploy_space/app.py
-          cp app/requirements.txt deploy_space/
+          cp app/requirements.txt deploy_space/ # You might not need this if using conda, but keeping for assets
           cp -r models/exported_model deploy_space/model
-          
+
           # Create README.md for the Space
           cat > deploy_space/README.md << 'EOF'
           ---
@@ -58,42 +68,43 @@ jobs:
           pinned: false
           license: mit
           ---
-          
+
           # Credit Scoring System
-          
+
           ML-powered credit risk assessment system built with MLOps best practices.
-          
+
           ## Features
           - Real-time credit risk prediction
           - Interactive Gradio interface
           - Production ML model from MLFlow
-          
+
           ## Model
           Trained on historical credit data with XGBoost/LightGBM.
-          
+
           ## MLOps Pipeline
           - Experiment tracking with MLFlow
           - CI/CD with GitHub Actions
           - Automated deployment to HF Spaces
           - Data drift monitoring with Evidently AI
           EOF
-      
+
       - name: Deploy to Hugging Face Space
         env:
+          # SECRET: Make sure HF_TOKEN is added to your GitHub repo's secrets
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_USERNAME: ${{ secrets.HF_USERNAME || 'your-username' }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
           SPACE_NAME: credit-scoring
         run: |
-          # Install huggingface_hub
-          pip install huggingface_hub
+          # The 'huggingface_hub' package is now installed via conda from environment.yml
           
           # Configure git
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
           
-          # Clone the Space repository
-          git clone https://huggingface.co/spaces/${HF_USERNAME}/${SPACE_NAME} hf_space || \
-            (pip install huggingface_hub[cli] && huggingface-cli repo create --type space --space_sdk gradio ${SPACE_NAME})
+          # This uses the 'hf_space' name consistently. If the repo doesn't exist,
+          # this command will fail. You need to create the Space manually in Hugging Face first
+          # for this automated push to work.
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${SPACE_NAME} hf_space
           
           # Copy files to Space repo
           cd hf_space
@@ -101,21 +112,5 @@ jobs:
           
           # Commit and push
           git add .
-          git commit -m "Deploy model from GitHub Actions - $(date)" || echo "No changes to commit"
-          git push https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${SPACE_NAME} main
-      
-      - name: Comment deployment URL
-        if: github.event_name == 'push'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const username = process.env.HF_USERNAME || 'your-username';
-            const spaceName = process.env.SPACE_NAME || 'credit-scoring';
-            const url = `https://huggingface.co/spaces/${username}/${spaceName}`;
-            
-            github.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body: `🚀 Deployed to Hugging Face Spaces: ${url}`
-            });
+          git commit -m "Deploy model from GitHub Actions - $(date)"
+          git push origin main
