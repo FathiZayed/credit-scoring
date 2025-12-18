@@ -1,0 +1,121 @@
+name: Deploy to Hugging Face Spaces
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'models/**'
+      - '.github/workflows/deploy_hf.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install mlflow gradio scikit-learn pandas numpy
+      
+      - name: Export model from MLFlow
+        run: |
+          # Start MLFlow server (or connect to remote)
+          # Export the production model
+          python scripts/export_model.py
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}
+      
+      - name: Prepare Space files
+        run: |
+          # Copy necessary files to a deployment folder
+          mkdir -p deploy_space
+          cp app/credit_scoring_demo.py deploy_space/app.py
+          cp app/requirements.txt deploy_space/
+          cp -r models/exported_model deploy_space/model
+          
+          # Create README.md for the Space
+          cat > deploy_space/README.md << 'EOF'
+          ---
+          title: Credit Scoring System
+          emoji: 🏦
+          colorFrom: blue
+          colorTo: green
+          sdk: gradio
+          sdk_version: 4.0.0
+          app_file: app.py
+          pinned: false
+          license: mit
+          ---
+          
+          # Credit Scoring System
+          
+          ML-powered credit risk assessment system built with MLOps best practices.
+          
+          ## Features
+          - Real-time credit risk prediction
+          - Interactive Gradio interface
+          - Production ML model from MLFlow
+          
+          ## Model
+          Trained on historical credit data with XGBoost/LightGBM.
+          
+          ## MLOps Pipeline
+          - Experiment tracking with MLFlow
+          - CI/CD with GitHub Actions
+          - Automated deployment to HF Spaces
+          - Data drift monitoring with Evidently AI
+          EOF
+      
+      - name: Deploy to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME || 'your-username' }}
+          SPACE_NAME: credit-scoring
+        run: |
+          # Install huggingface_hub
+          pip install huggingface_hub
+          
+          # Configure git
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          
+          # Clone the Space repository
+          git clone https://huggingface.co/spaces/${HF_USERNAME}/${SPACE_NAME} hf_space || \
+            (pip install huggingface_hub[cli] && huggingface-cli repo create --type space --space_sdk gradio ${SPACE_NAME})
+          
+          # Copy files to Space repo
+          cd hf_space
+          cp -r ../deploy_space/* .
+          
+          # Commit and push
+          git add .
+          git commit -m "Deploy model from GitHub Actions - $(date)" || echo "No changes to commit"
+          git push https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${SPACE_NAME} main
+      
+      - name: Comment deployment URL
+        if: github.event_name == 'push'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const username = process.env.HF_USERNAME || 'your-username';
+            const spaceName = process.env.SPACE_NAME || 'credit-scoring';
+            const url = `https://huggingface.co/spaces/${username}/${spaceName}`;
+            
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: `🚀 Deployed to Hugging Face Spaces: ${url}`
+            });

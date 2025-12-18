@@ -1,0 +1,34 @@
+name: credit-scoring
+
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  
+  # Core ML Libraries (removed specific patch versions for compatibility)
+  - scikit-learn
+  - pandas
+  - numpy
+  
+  # Tree-based models
+  - xgboost
+  - lightgbm
+  
+  # Deep Learning (specified without version to allow flexibility)
+  - pytorch
+  
+  # Pip is required for the next section
+  - pip
+  
+  # Pip-only / Custom Index packages
+  - pip:
+    # Transformers and Inference
+    - transformers[onnx]
+    - onnxruntime
+    
+    # UI and Experiment Tracking
+    - gradio
+    - mlflow
